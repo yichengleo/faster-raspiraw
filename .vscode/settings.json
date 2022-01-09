@@ -1,0 +1,27 @@
+{
+    "files.associations": {
+        "*.sv": "systemverilog",
+        "bcm_host.h": "c",
+        "vcos.h": "c",
+        "i2c-dev.h": "c",
+        "imx219_modes.h": "c",
+        "mmal_util.h": "c",
+        "rpi_dma_utils.h": "c",
+        "mailbox_client.h": "c",
+        "mailbox_controller.h": "c",
+        "proc_fs.h": "c",
+        "dma-bcm2708.h": "c",
+        "dma-mapping.h": "c",
+        "timekeeping.h": "c",
+        "mmal.h": "c",
+        "imx477_modes.h": "c",
+        "ov5647_modes.h": "c",
+        "chrono": "cpp",
+        "mmal_logging.h": "c",
+        "raw_header.h": "c",
+        "mmal_connection.h": "c",
+        "raspicli.h": "c",
+        "vc_image_types.h": "c"
+    },
+    "C_Cpp.errorSquiggles": "enabled"
+}
