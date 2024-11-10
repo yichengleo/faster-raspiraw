@@ -3,3 +3,7 @@
 
 # Build folder
 /build
+
+# Result files
+*res*
+*.csv

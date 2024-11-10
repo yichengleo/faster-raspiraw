@@ -27,9 +27,9 @@ find_package(WiringPi REQUIRED)
 # Add include directories
 include_directories(
     ${PROJECT_SOURCE_DIR}/include/
+    ${WIRINGPI_INCLUDE_DIRS} 
     /opt/vc/include/
     /opt/vc/include/interface/vctypes/
-    ${WIRINGPI_INCLUDE_DIRS}   # Add WiringPi includes
 ) 
     
 # Gather all .cpp files in the src directory
@@ -48,4 +48,11 @@ target_link_libraries(faster-raspiraw
     mmal_vc_client
     vcos
     bcm_host
+    # m               # Link math library
+    # jasper          # Link jasper library
+    # jpeg            # Link jpeg library
+    # lcms2           # Link lcms2 library
 )
+
+# # Define preprocessor macros (e.g., -DNODEPS)
+# target_compile_definitions(faster-raspiraw PRIVATE NODEPS)

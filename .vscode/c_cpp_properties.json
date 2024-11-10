@@ -11,7 +11,8 @@
                 "/lib/modules/5.10.103-v7l+/build",
                 "/usr/src/linux-headers-5.10.103-v7l+/include",
                 "/usr/src/linux-headers-5.10.103-v7l+/arch/arm/include",
-                "/usr/src/linux-headers-5.10.103-v7l+/arch/arm/include/generated"
+                "/usr/src/linux-headers-5.10.103-v7l+/arch/arm/include/generated",
+                "${workspaceFolder}/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

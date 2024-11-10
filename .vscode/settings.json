@@ -21,7 +21,9 @@
         "raw_header.h": "c",
         "mmal_connection.h": "c",
         "raspicli.h": "c",
-        "vc_image_types.h": "c"
+        "vc_image_types.h": "c",
+        "raspiraw.h": "c",
+        "regoperation.h": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

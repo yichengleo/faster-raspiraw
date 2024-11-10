@@ -26,177 +26,17 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#define VERSION_STRING "0.0.4"
+#include "raspiraw.h"
+#include "RegOperation.h"
 
-#define _GNU_SOURCE
-#include <ctype.h>
-#include <fcntl.h>
-#include <libgen.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include <linux/i2c.h>
-#include <linux/i2c-dev.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/ioctl.h>
-
-#include "interface/mmal/mmal.h"
-#include "interface/mmal/mmal_buffer.h"
-#include "interface/mmal/mmal_logging.h"
-#include "interface/mmal/util/mmal_default_components.h"
-#include "interface/mmal/util/mmal_util.h"
-#include "interface/mmal/util/mmal_util_params.h"
-#include "interface/mmal/util/mmal_connection.h"
-#include "interface/vcos/vcos.h"
-
-
-#include "bcm_host.h"
-#include "RaspiCLI.h"
-#include "raw_header.h"
-
-
-
-#define I2C_SLAVE_FORCE 	0x0706
-
-#define DEFAULT_I2C_DEVICE 	0
-#define FRAME_LOG		   	0
-#define BUFFER_NUM_MANUAL	8	// 0 sets the recommended buffer num
-
-#define I2C_DEVICE_NAME_LEN 13	// "/dev/i2c-XXX"+NULL
-static char i2c_device_name[I2C_DEVICE_NAME_LEN];
-
-struct brcm_raw_header *brcm_header = NULL;
-
-enum bayer_order {
-	//Carefully ordered so that an hflip is ^1,
-	//and a vflip is ^2.
-	BAYER_ORDER_BGGR,
-	BAYER_ORDER_GBRG,
-	BAYER_ORDER_GRBG,
-	BAYER_ORDER_RGGB
+const struct DEPTH DEPTH_T = {
+    { MMAL_ENCODING_BAYER_SBGGR8, MMAL_ENCODING_BAYER_SGBRG8, MMAL_ENCODING_BAYER_SGRBG8, MMAL_ENCODING_BAYER_SRGGB8 },
+    { MMAL_ENCODING_BAYER_SBGGR10P, MMAL_ENCODING_BAYER_SGBRG10P, MMAL_ENCODING_BAYER_SGRBG10P, MMAL_ENCODING_BAYER_SRGGB10P },
+    { MMAL_ENCODING_BAYER_SBGGR12P, MMAL_ENCODING_BAYER_SGBRG12P, MMAL_ENCODING_BAYER_SGRBG12P, MMAL_ENCODING_BAYER_SRGGB12P },
+    { MMAL_ENCODING_BAYER_SBGGR16, MMAL_ENCODING_BAYER_SGBRG16, MMAL_ENCODING_BAYER_SGRBG16, MMAL_ENCODING_BAYER_SRGGB16 }
 };
 
-struct sensor_regs {
-	uint16_t reg;
-	uint16_t data;
-};
-
-struct mode_def
-{
-	struct sensor_regs *regs;
-	int num_regs;
-	int width;
-	int height;
-	MMAL_FOURCC_T encoding;
-	enum bayer_order order;
-	int native_bit_depth;
-	uint8_t image_id;
-	uint8_t data_lanes;
-	unsigned int min_vts;
-	int line_time_ns;
-	uint32_t timing1;
-	uint32_t timing2;
-	uint32_t timing3;
-	uint32_t timing4;
-	uint32_t timing5;
-	uint32_t term1;
-	uint32_t term2;
-	int black_level;
-};
-
-struct sensor_def
-{
-	char *name;
-	struct mode_def *modes;
-	int num_modes;
-	struct sensor_regs *stop;
-	int num_stop_regs;
-
-	uint8_t i2c_addr;	// Device I2C slave address
-	int i2c_addressing; // Length of register address values
-	int i2c_data_size;	// Length of register data to write
-
-	//  Detecting the device
-	int i2c_ident_length;	  // Length of I2C ID register
-	uint16_t i2c_ident_reg;	  // ID register address
-	uint16_t i2c_ident_value; // ID register value
-
-	// Flip configuration
-	uint16_t vflip_reg;				   // Register for VFlip
-	int vflip_reg_bit;				   // Bit in that register for VFlip
-	uint16_t hflip_reg;				   // Register for HFlip
-	int hflip_reg_bit;				   // Bit in that register for HFlip
-	int flips_dont_change_bayer_order; // Some sensors do not change the
-									   // Bayer order by adjusting X/Y starts
-									   // to compensate.
-
-	uint16_t exposure_reg;
-	int exposure_reg_num_bits;
-
-	uint16_t vts_reg;
-	int vts_reg_num_bits;
-
-	uint16_t gain_reg;
-	int gain_reg_num_bits;
-
-	uint16_t xos_reg;
-	int xos_reg_num_bits;
-
-	uint16_t yos_reg;
-	int yos_reg_num_bits;
-};
-
-#define NUM_ELEMENTS(a)  (sizeof(a) / sizeof(a[0]))
-
-#include "ov5647_modes.h"
-#include "imx219_modes.h"
-#include "adv7282m_modes.h"
-
-const struct sensor_def *sensors[] = {
-	&ov5647,
-	&imx219,
-	&adv7282,
-	NULL
-};
-
-enum {
-	CommandHelp,
-	CommandMode,
-	CommandHFlip,
-	CommandVFlip,
-	CommandExposure,
-	CommandGain,
-	CommandOutput,
-	CommandWriteHeader,
-	CommandTimeout,
-	CommandSaveRate,
-	CommandBitDepth,
-	CommandCameraNum,
-	CommandExposureus,
-	CommandI2cBus,
-	CommandAwbGains,
-	CommandRegs,
-	CommandHinc,
-	CommandVinc,
-	CommandVoinc,
-	CommandHoinc,
-	CommandBin44,
-	CommandFps,
-	CommandWidth,
-	CommandHeight,
-	CommandLeft,
-	CommandTop,
-	CommandVts,
-	CommandLine,
-	CommandWriteHeader0,
-	CommandWriteHeaderG,
-	CommandWriteTimestamps,
-	CommandWriteEmpty,
-};
-
-static COMMAND_LIST cmdline_commands[] =
+const static COMMAND_LIST cmdline_commands[] =
 {
 	{ CommandHelp,			"-help",		"?",  	"This help information", 0 },
 	{ CommandMode,			"-mode",		"md", 	"Set sensor mode <mode>", 1 },
@@ -230,50 +70,11 @@ static COMMAND_LIST cmdline_commands[] =
 	{ CommandWriteEmpty,	"-empty",		"emp",	"Write empty output files", 0 },
 };
 
-static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
+struct brcm_raw_header *brcm_header = NULL;
 
-typedef struct __attribute__((aligned(16))) pts_node {
-	uint32_t idx;
-	uint64_t  pts;
-	struct pts_node *nxt;
-} *PTS_NODE_T;
+const static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
 
-typedef struct
-{
-	int 	mode;
-	int 	hflip;
-	int 	vflip;
-	int 	exposure;
-	int 	gain;
-	char 	*output;
-	int 	capture;
-	int 	write_header;
-	int 	timeout;
-	int 	saverate;
-	int 	bit_depth;
-	int 	camera_num;
-	int 	exposure_us;
-	int 	i2c_bus;
-	double 	awb_gains_r;
-	double 	awb_gains_b;
-	char 	*regs;
-	int 	hinc;
-	int 	vinc;
-	int 	voinc;
-	int 	hoinc;
-	int 	bin44;
-	double 	fps;
-	int 	width;
-	int 	height;
-	int 	left;
-	int 	top;
-	char 	*write_header0;
-	char 	*write_headerg;
-	char 	*write_timestamps;
-	int 	write_empty;
-	PTS_NODE_T ptsa;
-	PTS_NODE_T ptso;
-} RASPIRAW_PARAMS_T;
+// const static char* memory_tmp = "/dev/shm";
 
 void update_regs(const struct sensor_def *sensor, struct mode_def *mode, int hflip, int vflip, int exposure, int gain);
 
@@ -312,6 +113,18 @@ static int i2c_rd(int fd, uint8_t i2c_addr, uint16_t reg, uint8_t *values, uint3
 	return 0;
 }
 
+
+#include "ov5647_modes.h"
+#include "imx219_modes.h"
+#include "adv7282m_modes.h"
+
+const struct sensor_def *sensors[] = {
+	&ov5647,
+	&imx219,
+	&adv7282,
+	NULL
+};
+
 const struct sensor_def * probe_sensor(void)
 {
 	int fd;
@@ -347,59 +160,6 @@ const struct sensor_def * probe_sensor(void)
 	return sensor;
 }
 
-void send_regs(int fd, const struct sensor_def *sensor, const struct sensor_regs *regs, int num_regs)
-{
-	int i;
-	for (i=0; i<num_regs; i++)
-	{
-		if (regs[i].reg == 0xFFFF)
-		{
-			if (ioctl(fd, I2C_SLAVE_FORCE, regs[i].data) < 0)
-			{
-				vcos_log_error("Failed to set I2C address to %02X", regs[i].data);
-			}
-		}
-		else if (regs[i].reg == 0xFFFE)
-		{
-			vcos_sleep(regs[i].data);
-		}
-		else
-		{
-			if (sensor->i2c_addressing == 1)
-			{
-				unsigned char msg[3] = {regs[i].reg, regs[i].data & 0xFF };
-				int len = 2;
-
-				if (sensor->i2c_data_size == 2)
-				{
-					msg[1] = (regs[i].data>>8) & 0xFF;
-					msg[2] = regs[i].data & 0xFF;
-					len = 3;
-				}
-				if (write(fd, msg, len) != len)
-				{
-					vcos_log_error("Failed to write register index %d (%02X val %02X)", i, regs[i].reg, regs[i].data);
-				}
-			}
-			else
-			{
-				unsigned char msg[4] = {regs[i].reg>>8, regs[i].reg, regs[i].data};
-				int len = 3;
-
-				if (sensor->i2c_data_size == 2)
-				{
-					msg[2] = regs[i].data >> 8;
-					msg[3] = regs[i].data;
-					len = 4;
-				}
-				if (write(fd, msg, len) != len)
-				{
-					vcos_log_error("Failed to write register index %d", i);
-				}
-			}
-		}
-	}
-}
 
 void start_camera_streaming(const struct sensor_def *sensor, struct mode_def *mode)
 {
@@ -472,15 +232,15 @@ static void callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 	{
 		RASPIRAW_PARAMS_T *cfg = (RASPIRAW_PARAMS_T *)port->userdata;
 
-		if (!(buffer->flags&MMAL_BUFFER_HEADER_FLAG_CODECSIDEINFO) &&
-                    (((count++)%cfg->saverate)==0))
+		if (!(buffer->flags & MMAL_BUFFER_HEADER_FLAG_CODECSIDEINFO) &&
+                    (((count++) % cfg->saverate) == 0))
 		{
 			// FIXME
 			// Save every Nth frame
 			// SD card access is too slow to do much more.
-			FILE *file;
+
 			char *filename = NULL;
-			// if (create_filenames(&filename, cfg->output, count) == MMAL_SUCCESS)
+
 			if(asprintf(&filename, cfg->output, count) >= 0)
 			{
 				int fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
@@ -533,28 +293,8 @@ static void callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 					perror("open");
 				}
 				free(filename);
+				// signal to copy the file
 			}
-			// {
-			// 	file = fopen(filename, "wb");
-			// 	if (file)
-			// 	{
-			// 		if (cfg->ptso)  // make sure previous malloc() was successful
-			// 		{
-			// 			cfg->ptso->idx = count;
-			// 			cfg->ptso->pts = buffer->pts;
-			// 			cfg->ptso->nxt = malloc(sizeof(*cfg->ptso->nxt));
-			// 			cfg->ptso = cfg->ptso->nxt;
-			// 		}
-			// 		if (!cfg->write_empty)
-			// 		{
-			// 			if (cfg->write_header)
-			// 				fwrite(brcm_header, BRCM_RAW_HEADER_LENGTH, 1, file);
-			// 			fwrite(buffer->data, buffer->length, 1, file);
-			// 		}
-			// 		fclose(file);
-			// 	}
-			// 	free(filename);
-			// }
 		}
 		buffer->length = 0;
 		mmal_port_send_buffer(port, buffer);
@@ -569,30 +309,6 @@ uint32_t order_and_bit_depth_to_encoding(enum bayer_order order, int bit_depth)
 	//BAYER_ORDER_GBRG,
 	//BAYER_ORDER_GRBG,
 	//BAYER_ORDER_RGGB
-	const uint32_t depth8[] = {
-		MMAL_ENCODING_BAYER_SBGGR8,
-		MMAL_ENCODING_BAYER_SGBRG8,
-		MMAL_ENCODING_BAYER_SGRBG8,
-		MMAL_ENCODING_BAYER_SRGGB8
-	};
-	const uint32_t depth10[] = {
-		MMAL_ENCODING_BAYER_SBGGR10P,
-		MMAL_ENCODING_BAYER_SGBRG10P,
-		MMAL_ENCODING_BAYER_SGRBG10P,
-		MMAL_ENCODING_BAYER_SRGGB10P
-	};
-	const uint32_t depth12[] = {
-		MMAL_ENCODING_BAYER_SBGGR12P,
-		MMAL_ENCODING_BAYER_SGBRG12P,
-		MMAL_ENCODING_BAYER_SGRBG12P,
-		MMAL_ENCODING_BAYER_SRGGB12P,
-	};
-	const uint32_t depth16[] = {
-		MMAL_ENCODING_BAYER_SBGGR16,
-		MMAL_ENCODING_BAYER_SGBRG16,
-		MMAL_ENCODING_BAYER_SGRBG16,
-		MMAL_ENCODING_BAYER_SRGGB16,
-	};
 	if (order < 0 || order > 3)
 	{
 		vcos_log_error("order out of range - %d", order);
@@ -602,13 +318,13 @@ uint32_t order_and_bit_depth_to_encoding(enum bayer_order order, int bit_depth)
 	switch(bit_depth)
 	{
 		case 8:
-			return depth8[order];
+			return DEPTH_T.depth8[order];
 		case 10:
-			return depth10[order];
+			return DEPTH_T.depth10[order];
 		case 12:
-			return depth12[order];
+			return DEPTH_T.depth12[order];
 		case 16:
-			return depth16[order];
+			return DEPTH_T.depth16[order];
 	}
 	vcos_log_error("%d not one of the handled bit depths", bit_depth);
 	return 0;
@@ -928,17 +644,6 @@ static int parse_cmdline(int argc, char **argv, RASPIRAW_PARAMS_T *cfg)
 	return 0;
 }
 
-//The process first loads the cleaned up dump of the registers
-//than updates the known registers to the proper values
-//based on: http://www.seeedstudio.com/wiki/images/3/3c/Ov5647_full.pdf
-enum operation {
-       EQUAL,  //Set bit to value
-       SET,    //Set bit
-       CLEAR,  //Clear bit
-       XOR     //Xor bit
-};
-
-void modReg(struct mode_def *mode, uint16_t reg, int startBit, int endBit, int value, enum operation op);
 
 int main(int argc, char** argv) {
 	RASPIRAW_PARAMS_T cfg = {
@@ -949,7 +654,7 @@ int main(int argc, char** argv) {
 		.gain = -1,
 		.output = NULL,
 		.capture = 0,
-		.write_header = 0,
+		.write_header = 1,
 		.timeout = 5000,
 		.saverate = 20,
 		.bit_depth = -1,
@@ -1607,30 +1312,51 @@ component_destroy:
 	{
 		// FIXME
 		// Save timestamps
-		FILE *file;
-		file = fopen(cfg.write_timestamps, "wb");
-		if (file)
-		{
-			uint64_t old;
-			PTS_NODE_T aux;
-			for(aux = cfg.ptsa; aux != cfg.ptso; aux = aux->nxt)
-			{
-				if (aux == cfg.ptsa)
-				{
-					fprintf(file, ",%d,%lld\n", aux->idx, aux->pts);
-				}
-				else
-				{
-					fprintf(file, "%lld,%d,%lld\n", aux->pts-old, aux->idx, aux->pts);
-				}
-				old = aux->pts;
-			}
-			fclose(file);
+
+
+		PTS_NODE_T aux;
+		// Rough estimation of the line size
+		size_t file_sz = (cfg.timeout / cfg.saverate) << 4;
+
+		int fd = open(cfg.write_timestamps, O_RDWR | O_CREAT | O_TRUNC, 0644);
+		if(fd == -1){
+			perror("Error opening file");
+			return -1;
 		}
+		if(ftruncate(fd, file_sz) == -1){
+			perror("Error setting file size");
+			close(fd);
+			return -1;
+		}
+		void* mapped_mem = mmap(NULL, file_sz, PROT_WRITE, MAP_SHARED, fd, 0);
+		if (mapped_mem == MAP_FAILED){
+			perror("Error mapping file");
+			close(fd);
+			return -1;
+		}
+
+		uint64_t old = 0;
+		char *write_ptr = (char *)mapped_mem;
+		for(aux = cfg.ptsa; aux != cfg.ptso; aux = aux->nxt)
+		{
+			if (aux == cfg.ptsa)
+				write_ptr += sprintf(write_ptr, ",%d,%lld\n", aux->idx, aux->pts);
+			else
+				write_ptr += sprintf(write_ptr, "%lld,%d,%lld\n", aux->pts-old, aux->idx, aux->pts);
+			old = aux->pts;
+		}
+
+		// // Clean up memory-mapped region and file
+		// if (msync(mapped_mem, file_sz, MS_SYNC) == -1) {
+		// 	perror("Error syncing file");
+		// }
+
+		munmap(mapped_mem, file_sz);
+		close(fd);
 
 		while (cfg.ptsa != cfg.ptso)
 		{
-			PTS_NODE_T aux = cfg.ptsa->nxt;
+			aux = cfg.ptsa->nxt;
 			free(cfg.ptsa);
 			cfg.ptsa = aux;
 		}
@@ -1639,122 +1365,3 @@ component_destroy:
 
 	return 0;
 }
-
-void modRegBit(struct mode_def *mode, uint16_t reg, int bit, int value, enum operation op)
-{
-	int i = 0;
-	uint16_t val;
-	while(i < mode->num_regs && mode->regs[i].reg != reg) i++;
-	if (i == mode->num_regs) {
-		vcos_log_error("Reg: %04X not found!\n", reg);
-		return;
-	}
-	val = mode->regs[i].data;
-
-	switch(op)
-	{
-		case EQUAL:
-			val = (val | (1 << bit)) & (~( (1 << bit) ^ (value << bit) ));
-			break;
-		case SET:
-			val = val | (1 << bit);
-			break;
-		case CLEAR:
-			val = val & ~(1 << bit);
-			break;
-		case XOR:
-			val = val ^ (value << bit);
-			break;
-	}
-	mode->regs[i].data = val;
-}
-
-void modReg(struct mode_def *mode, uint16_t reg, int startBit, int endBit, int value, enum operation op)
-{
-	int i;
-	for(i = startBit; i <= endBit; i++) {
-		modRegBit(mode, reg, i, value >> i & 1, op);
-	}
-}
-
-void update_regs(const struct sensor_def *sensor, struct mode_def *mode, int hflip, int vflip, int exposure, int gain)
-{
-	if (sensor->vflip_reg)
-	{
-		modRegBit(mode, sensor->vflip_reg, sensor->vflip_reg_bit, vflip, XOR);
-		if (vflip && !sensor->flips_dont_change_bayer_order)
-			mode->order ^= 2;
-	}
-
-	if (sensor->hflip_reg)
-	{
-		modRegBit(mode, sensor->hflip_reg, sensor->hflip_reg_bit, hflip, XOR);
-		if (hflip && !sensor->flips_dont_change_bayer_order)
-			mode->order ^= 1;
-	}
-
-	if (sensor->exposure_reg && exposure != -1)
-	{
-		if (exposure < 0 || exposure >= (1<<sensor->exposure_reg_num_bits))
-		{
-			vcos_log_error("Invalid exposure:%d, exposure range is 0 to %u!\n",
-						exposure, (1<<sensor->exposure_reg_num_bits)-1);
-		}
-		else
-		{
-			uint8_t val;
-			int i, j=sensor->exposure_reg_num_bits-1;
-			int num_regs = (sensor->exposure_reg_num_bits+7)>>3;
-
-			for(i=0; i<num_regs; i++, j-=8)
-			{
-				val = (exposure >> (j&~7)) & 0xFF;
-				modReg(mode, sensor->exposure_reg+i, 0, j&0x7, val, EQUAL);
-				vcos_log_error("Set exposure %04X to %02X", sensor->exposure_reg+i, val);
-			}
-		}
-	}
-	if (sensor->vts_reg && exposure != -1 && exposure >= mode->min_vts)
-	{
-		if (exposure < 0 || exposure >= (1<<sensor->vts_reg_num_bits))
-		{
-			vcos_log_error("Invalid exposure:%d, vts range is 0 to %u!\n",
-						exposure, (1<<sensor->vts_reg_num_bits)-1);
-		}
-		else
-		{
-			uint8_t val;
-			int i, j=sensor->vts_reg_num_bits-1;
-			int num_regs = (sensor->vts_reg_num_bits+7)>>3;
-
-			for(i = 0; i<num_regs; i++, j-=8)
-			{
-				val = (exposure >> (j&~7)) & 0xFF;
-				modReg(mode, sensor->vts_reg+i, 0, j&0x7, val, EQUAL);
-				vcos_log_error("Set vts %04X to %02X", sensor->vts_reg+i, val);
-			}
-		}
-	}
-	if (sensor->gain_reg && gain != -1)
-	{
-		if (gain < 0 || gain >= (1<<sensor->gain_reg_num_bits))
-		{
-			vcos_log_error("Invalid gain:%d, gain range is 0 to %u\n",
-						gain, (1<<sensor->gain_reg_num_bits)-1);
-		}
-		else
-		{
-			uint8_t val;
-			int i, j=sensor->gain_reg_num_bits-1;
-			int num_regs = (sensor->gain_reg_num_bits+7)>>3;
-
-			for(i = 0; i<num_regs; i++, j-=8)
-			{
-				val = (gain >> (j&~7)) & 0xFF;
-				modReg(mode, sensor->gain_reg+i, 0, j&0x7, val, EQUAL);
-				vcos_log_error("Set gain %04X to %02X", sensor->gain_reg+i, val);
-			}
-		}
-	}
-}
-
