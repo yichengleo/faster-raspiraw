@@ -1,3 +1,6 @@
+/**
+ * Modified by https://github.com/yichengleo/
+ */
 /*
 Copyright (c) 2015, Raspberry Pi Foundation
 Copyright (c) 2015, Dave Stevenson
@@ -45,7 +48,7 @@ const static COMMAND_LIST cmdline_commands[] =
 	{ CommandExposure,		"-ss",			"e",  	"Set the sensor exposure time (not calibrated units)", 0 },
 	{ CommandGain,			"-gain",		"g",  	"Set the sensor gain code (not calibrated units)", 0 },
 	{ CommandOutput,		"-output",		"o",  	"Set the output filename", 0 },
-	{ CommandWriteHeader,	"-header",		"hd", 	"Write the BRCM header to the output file", 0 },
+	{ CommandWriteHeader,	"-header",		"hd", 	"Write the BRCM header to the output file", 1 },
 	{ CommandTimeout,		"-timeout",		"t",  	"Time (in ms) before shutting down (if not specified, set to 5s)", 1 },
 	{ CommandSaveRate, 		"-saverate",	"sr", 	"Save every Nth frame", 1 },
 	{ CommandBitDepth, 		"-bitdepth",	"b",  	"Set output raw bit depth (8, 10, 12 or 16, if not specified, set to sensor native)", 1 },
@@ -82,8 +85,7 @@ volatile bool enableCopy = true;
 pthread_t threads[MAX_THREADS];  									// Working threads
 pthread_mutex_t task_enqueue_mutex = PTHREAD_MUTEX_INITIALIZER;  	// Mutex for protecting task queue
 pthread_mutex_t task_dequeue_mutex = PTHREAD_MUTEX_INITIALIZER;  	// Mutex for protecting task queue
-sem_t produced_sem;               
-// sem_t producer_stop_sem;
+sem_t produced_sem;
 
 file_copy_task_t* task_queue_head = NULL;
 file_copy_task_t* task_queue_tail = NULL;
@@ -138,16 +140,13 @@ file_copy_task_t* dequeue_task(){
         pthread_mutex_unlock(&task_dequeue_mutex);
         return NULL;
     }
-	// free(task_queue_head->src);
-	// free(task_queue_tail->dst);
-	// free(task_queue_head->next);
+
 	file_copy_task_t* task = malloc(sizeof(task_queue_head));
 	// Deep copy the src and dst strings
 	task->src = strdup(task_queue_head->src);
 	task->dst = strdup(task_queue_head->dst);
 	task->next = NULL;
-	// memcpy(task, task_queue_head, sizeof(task_queue_head));
-	// file_copy_task_t* task = task_queue_head;
+
 	task_queue_head = task_queue_head->next;
 
 	if (task_queue_head == NULL) {
@@ -163,11 +162,6 @@ void* worker(void *args){
 		sem_wait(&produced_sem);
 		file_copy_task_t* task = dequeue_task();
 		if(task){
-			// Renaming only works on the same file system
-            // if (rename(task->src, task->dst) != 0) {
-            //     perror("Error moving file");
-			// }
-
             int src_fd = shm_open(strrchr(task->src, '/'), O_RDONLY, 0644);
             // int src_fd = open(task->src, O_RDONLY);
             if (src_fd < 0) {
@@ -270,7 +264,7 @@ int i2c_rd(int fd, uint8_t i2c_addr, uint16_t reg, uint8_t *values, uint32_t n, 
 	msgset.nmsgs = 2;
 
 	err = ioctl(fd, I2C_RDWR, &msgset);
-	//vcos_log_error("Read i2c addr %02X, reg %04X (len %d), value %02X, err %d", i2c_addr, msgs[0].buf[0], msgs[0].len, values[0], err);
+	// vcos_log_error("Read i2c addr %02X, reg %04X (len %d), value %02X, err %d", i2c_addr, msgs[0].buf[0], msgs[0].len, values[0], err);
 	if (err != msgset.nmsgs)
 		return -1;
 
@@ -774,11 +768,11 @@ static int parse_cmdline(int argc, char **argv, RASPIRAW_PARAMS_T *cfg)
 				break;
 
 			case CommandBin44:
-                                cfg->bin44 = 1;
+				cfg->bin44 = 1;
 				break;
 
 			case CommandFps:
-                                if (sscanf(argv[i + 1], "%lf", &cfg->fps) != 1)
+				if (sscanf(argv[i + 1], "%lf", &cfg->fps) != 1)
 					valid = 0;
 				else
 					i++;
@@ -841,7 +835,7 @@ static int parse_cmdline(int argc, char **argv, RASPIRAW_PARAMS_T *cfg)
 			case CommandWriteEmpty:
 				cfg->write_empty = 1;
 				break;
-
+				
 			default:
 				valid = 0;
 				break;
@@ -1111,10 +1105,10 @@ int main(int argc, char** argv) {
 	bcm_host_init();
 	vcos_log_register("FastRaspiRaw", VCOS_LOG_CATEGORY);
 	
-	vcos_log_error("Now start thread pool...");
+	// vcos_log_error("Now start thread pool...");
 	if(enableCopy)
 		init_thread_pool(MAX_THREADS);
-	vcos_log_error("Now start thread pool successful...");
+	// vcos_log_error("Now start thread pool successful...");
 	
 
 	status = mmal_component_create("vc.ril.rawcam", &rawcam);

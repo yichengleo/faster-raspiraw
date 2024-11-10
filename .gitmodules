@@ -1,0 +1,6 @@
+[submodule "WiringPi"]
+	path = WiringPi
+	url = https://github.com/yichengleo/WiringPi
+[submodule "userland-rawcam"]
+	path = userland-rawcam
+	url = https://github.com/yichengleo/userland-rawcam

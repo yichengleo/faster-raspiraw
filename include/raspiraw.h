@@ -38,7 +38,7 @@
 #include "raw_header.h"
 
 
-
+#define MAX_THREADS			4
 #define I2C_SLAVE_FORCE 	0x0706
 
 #define DEFAULT_I2C_DEVICE 	0
@@ -231,7 +231,6 @@ enum operation {
 
 static int parse_cmdline(int argc, char **argv, RASPIRAW_PARAMS_T *cfg);
 
-#define MAX_THREADS 4
 
 typedef struct file_copy_task{
     char *src;  // Source file path
