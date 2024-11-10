@@ -16,10 +16,10 @@ Supported sensors:
 
 Table of contents:
 
-	$ faster-raspiraw
+$ faster-raspiraw
 
-```bash
 faster-raspiraw Camera App 0.0.4
+
 -?, --help	: This help information
 -md, --mode	: Set sensor mode <mode>
 -hf, --hflip	: Set horizontal flip
@@ -44,7 +44,7 @@ faster-raspiraw Camera App 0.0.4
 -hd0, --header0	: Sets filename to write the BRCM header to
 -ts, --tstamps	: Sets filename to write timestamps to
 -emp, --empty	: Write empty output files
-```
+$
 
 
 
