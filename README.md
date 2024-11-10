@@ -16,8 +16,6 @@ Supported sensors:
 
 Table of contents:
 
-Table of contents:
-
 	$ faster-raspiraw
 
 	raspiraw Camera App 0.0.4
