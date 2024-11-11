@@ -6,4 +6,6 @@
 
 # Result files
 *res*
-*.csv
+*csv
+out.*
+hd0.32k

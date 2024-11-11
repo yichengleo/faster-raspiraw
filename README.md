@@ -18,7 +18,7 @@ Table of contents:
 
 	$ faster-raspiraw
 
-	raspiraw Camera App 0.0.4
+	faster-raspiraw Camera App 0.0.4
 
 	-?, --help	: This help information
 	-md, --mode	: Set sensor mode <mode>
@@ -46,9 +46,13 @@ Table of contents:
 	-emp, --empty	: Write empty output files
 	$
 
+## Release note
 
-
-
+- Utilized `mmap()`, `memcpy()` to perform raw data saving.
+- Configured `/dev/shm` as storage buffer.
+- Multithreading queue to perform copy from `/dev/shm` to user designated dir.
+- Efficient copying via `open_shm()` and `unlink_shm()`.
+- Able to archive `99.1%` valid data rate without copying, and perform capturing time longer than `50`s with copying.
 
 
 ## Dependencies

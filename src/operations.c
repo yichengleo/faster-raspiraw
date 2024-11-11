@@ -1,5 +1,5 @@
 #include "raspiraw.h"
-#include "RegOperation.h"
+#include "operations.h"
 
 void send_regs(int fd, const struct sensor_def *sensor, const struct sensor_regs *regs, int num_regs)
 {
