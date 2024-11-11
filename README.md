@@ -50,9 +50,10 @@ Table of contents:
 
 - Utilized `mmap()`, `memcpy()` to perform raw data saving.
 - Configured `/dev/shm` as storage buffer.
-- Multithreading queue to perform copy from `/dev/shm` to user designated dir.
+- Multithreading to perform copy from `/dev/shm` to user designated dir, with `MAX_THREADS` num of workers as the thread pool.
 - Efficient copying via `open_shm()` and `unlink_shm()`.
 - Able to archive `99.1%` valid data rate without copying, and perform capturing time longer than `50`s with copying.
+- Used `CMake` for project management.
 
 
 ## Dependencies
