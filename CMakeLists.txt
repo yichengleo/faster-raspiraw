@@ -16,13 +16,16 @@ endif()
 
 set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" )
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lrt")
 LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
 # Add compiler optimization flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast")
+add_compile_options(-Wno-stringop-overflow)
 
 # find packages
 find_package(WiringPi REQUIRED)
+find_package(Threads REQUIRED)
 
 # Add include directories
 include_directories(
@@ -48,6 +51,7 @@ target_link_libraries(faster-raspiraw
     mmal_vc_client
     vcos
     bcm_host
+    ${CMAKE_THREAD_LIBS_INIT}
     # m               # Link math library
     # jasper          # Link jasper library
     # jpeg            # Link jpeg library

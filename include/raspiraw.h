@@ -9,12 +9,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+
+#include <pthread.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include "interface/mmal/mmal.h"
 #include "interface/mmal/mmal_buffer.h"
@@ -223,5 +230,21 @@ enum operation {
 };
 
 static int parse_cmdline(int argc, char **argv, RASPIRAW_PARAMS_T *cfg);
+
+#define MAX_THREADS 4
+
+typedef struct file_copy_task{
+    char *src;  // Source file path
+    char *dst;  // Destination file path
+	struct file_copy_task* next;
+} file_copy_task_t;
+
+void *worker(void* args);
+
+void enqueue_task(char *const, char *const);
+file_copy_task_t* dequeue_task();
+
+void init_thread_pool(size_t);
+void dstr_thread_pool(size_t);
 
 #endif  // #ifndef

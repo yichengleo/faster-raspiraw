@@ -23,7 +23,8 @@
         "raspicli.h": "c",
         "vc_image_types.h": "c",
         "raspiraw.h": "c",
-        "regoperation.h": "c"
+        "regoperation.h": "c",
+        "ranges": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

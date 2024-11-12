@@ -27,7 +27,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "raspiraw.h"
-#include "RegOperation.h"
+#include "operations.h"
 
 const struct DEPTH DEPTH_T = {
     { MMAL_ENCODING_BAYER_SBGGR8, MMAL_ENCODING_BAYER_SGBRG8, MMAL_ENCODING_BAYER_SGRBG8, MMAL_ENCODING_BAYER_SRGGB8 },
@@ -74,11 +74,175 @@ struct brcm_raw_header *brcm_header = NULL;
 
 const static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
 
-// const static char* memory_tmp = "/dev/shm";
+static char* mem_dir = "/dev/shm";
+static char* des_dir = NULL;
+static char* appended_path = NULL;
+volatile bool enableCopy = true;
 
-void update_regs(const struct sensor_def *sensor, struct mode_def *mode, int hflip, int vflip, int exposure, int gain);
+pthread_t threads[MAX_THREADS];  									// Working threads
+pthread_mutex_t task_enqueue_mutex = PTHREAD_MUTEX_INITIALIZER;  	// Mutex for protecting task queue
+pthread_mutex_t task_dequeue_mutex = PTHREAD_MUTEX_INITIALIZER;  	// Mutex for protecting task queue
+sem_t produced_sem;               
+// sem_t producer_stop_sem;
 
-static int i2c_rd(int fd, uint8_t i2c_addr, uint16_t reg, uint8_t *values, uint32_t n, const struct sensor_def *sensor)
+file_copy_task_t* task_queue_head = NULL;
+file_copy_task_t* task_queue_tail = NULL;
+
+void init_thread_pool(size_t num_threads) {
+    pthread_mutex_init(&task_enqueue_mutex, NULL);
+	pthread_mutex_init(&task_dequeue_mutex, NULL);
+    sem_init(&produced_sem, 0, 0);
+    // sem_init(&producer_stop_sem, 0, 0);
+
+
+    pthread_t threads[num_threads];
+    for (int i = 0; i < num_threads; ++i) {
+        pthread_create(&threads[i], NULL, worker, NULL);
+    }
+}
+
+void dstr_thread_pool(size_t num_threads){
+	// sem_wait(&producer_stop_sem);
+	for (int i = 0; i < num_threads; ++i) {
+        pthread_join(threads[i], NULL);
+    }
+	pthread_mutex_destroy(&task_dequeue_mutex);
+	pthread_mutex_destroy(&task_enqueue_mutex);
+    sem_destroy(&produced_sem);
+	// sem_destroy(&producer_stop_sem);
+}
+
+void enqueue_task(char *const src, char *const dst) {
+
+    pthread_mutex_lock(&task_enqueue_mutex);
+
+	file_copy_task_t *new_task = malloc(sizeof(file_copy_task_t));
+
+    if (task_queue_tail) {
+        task_queue_tail->next = new_task;
+    } else {
+        task_queue_head = new_task;
+    }
+    task_queue_tail = new_task;
+	task_queue_tail->src = src;
+    task_queue_tail->dst = dst;
+
+    pthread_mutex_unlock(&task_enqueue_mutex);
+	sem_post(&produced_sem);  // Signal a new task
+}
+
+file_copy_task_t* dequeue_task(){
+
+	pthread_mutex_lock(&task_dequeue_mutex);
+	if (task_queue_head == NULL) {
+        pthread_mutex_unlock(&task_dequeue_mutex);
+        return NULL;
+    }
+	// free(task_queue_head->src);
+	// free(task_queue_tail->dst);
+	// free(task_queue_head->next);
+	file_copy_task_t* task = malloc(sizeof(task_queue_head));
+	// Deep copy the src and dst strings
+	task->src = strdup(task_queue_head->src);
+	task->dst = strdup(task_queue_head->dst);
+	task->next = NULL;
+	// memcpy(task, task_queue_head, sizeof(task_queue_head));
+	// file_copy_task_t* task = task_queue_head;
+	task_queue_head = task_queue_head->next;
+
+	if (task_queue_head == NULL) {
+		task_queue_tail = NULL;
+	}
+
+	pthread_mutex_unlock(&task_dequeue_mutex);
+	return task;
+}
+
+void* worker(void *args){
+	while(1){
+		sem_wait(&produced_sem);
+		file_copy_task_t* task = dequeue_task();
+		if(task){
+			// Renaming only works on the same file system
+            // if (rename(task->src, task->dst) != 0) {
+            //     perror("Error moving file");
+			// }
+
+            int src_fd = shm_open(strrchr(task->src, '/'), O_RDONLY, 0644);
+            // int src_fd = open(task->src, O_RDONLY);
+            if (src_fd < 0) {
+                perror("Error opening source file");
+                goto cleanup;
+            }
+
+            struct stat st;
+            if (fstat(src_fd, &st) < 0) {
+                perror("Error getting source file size");
+                goto cleanup;
+            }
+
+            size_t file_sz = st.st_size;
+            void *src_map = mmap(NULL, file_sz, PROT_READ, MAP_SHARED, src_fd, 0);
+            if (src_map == MAP_FAILED) {
+                perror("Error mmap'ing source file");
+                goto cleanup;
+            }
+
+            int dst_fd = open(task->dst, O_RDWR | O_CREAT | O_TRUNC, 0666);
+            if (dst_fd < 0) {
+                perror("Error opening destination file");
+                goto cleanup;
+            }
+
+            if (ftruncate(dst_fd, file_sz) < 0) {
+                perror("Error setting destination file size");
+                goto cleanup;
+            }
+
+            void *dst_map = mmap(NULL, file_sz, PROT_WRITE, MAP_SHARED, dst_fd, 0);
+            if (dst_map == MAP_FAILED) {
+                perror("Error mmap'ing destination file");
+                goto cleanup;
+            }
+
+            memcpy(dst_map, src_map, file_sz);  // Perform the copy
+
+            munmap(src_map, file_sz);
+            munmap(dst_map, file_sz);
+            close(src_fd);
+            close(dst_fd);
+			
+			if (unlink(task->src) != 0) {
+				perror("Error deleting source file after copy");
+				goto cleanup;
+			}
+			goto cleanrest;
+
+		cleanup:
+            // Clean up task memory
+			if(task->src){
+				free(task->src);
+				task->src = NULL;
+			}
+		cleanrest:
+			if(task->dst){
+				free(task->dst);
+				task->src= NULL;
+			}
+			if(task){
+				free(task);
+				task->src = NULL;
+			}
+		}
+		else{
+			continue;
+		}
+	}
+	
+}
+
+
+int i2c_rd(int fd, uint8_t i2c_addr, uint16_t reg, uint8_t *values, uint32_t n, const struct sensor_def *sensor)
 {
 	int err;
 	uint8_t buf[2] = { reg >> 8, reg & 0xff };
@@ -112,54 +276,6 @@ static int i2c_rd(int fd, uint8_t i2c_addr, uint16_t reg, uint8_t *values, uint3
 
 	return 0;
 }
-
-
-#include "ov5647_modes.h"
-#include "imx219_modes.h"
-#include "adv7282m_modes.h"
-
-const struct sensor_def *sensors[] = {
-	&ov5647,
-	&imx219,
-	&adv7282,
-	NULL
-};
-
-const struct sensor_def * probe_sensor(void)
-{
-	int fd;
-	const struct sensor_def **sensor_list = &sensors[0];
-	const struct sensor_def *sensor = NULL;
-
-	fd = open(i2c_device_name, O_RDWR);
-	if (!fd)
-	{
-		vcos_log_error("Couldn't open I2C device");
-		return NULL;
-	}
-
-	while(*sensor_list != NULL)
-	{
-		uint16_t reg = 0;
-		sensor = *sensor_list;
-		vcos_log_error("Probing sensor %s on addr %02X", sensor->name, sensor->i2c_addr);
-		if (sensor->i2c_ident_length <= 2)
-		{
-			if (!i2c_rd(fd, sensor->i2c_addr, sensor->i2c_ident_reg, (uint8_t*)&reg, sensor->i2c_ident_length, sensor))
-			{
-				if (reg == sensor->i2c_ident_value)
-				{
-					vcos_log_error("Found sensor %s at address %02X", sensor->name, sensor->i2c_addr);
-					break;
-				}
-			}
-		}
-		sensor_list++;
-		sensor = NULL;
-	}
-	return sensor;
-}
-
 
 void start_camera_streaming(const struct sensor_def *sensor, struct mode_def *mode)
 {
@@ -198,6 +314,53 @@ void stop_camera_streaming(const struct sensor_def *sensor)
 	close(fd);
 }
 
+
+#include "ov5647_modes.h"
+#include "imx219_modes.h"
+#include "adv7282m_modes.h"
+
+const struct sensor_def *sensors[] = {
+	&ov5647,
+	&imx219,
+	&adv7282,
+	NULL
+};
+
+const struct sensor_def* probe_sensor(void)
+{
+	int fd;
+	const struct sensor_def **sensor_list = &sensors[0];
+	const struct sensor_def *sensor = NULL;
+
+	fd = open(i2c_device_name, O_RDWR);
+	if (!fd)
+	{
+		vcos_log_error("Couldn't open I2C device");
+		return NULL;
+	}
+
+	while(*sensor_list != NULL)
+	{
+		uint16_t reg = 0;
+		sensor = *sensor_list;
+		vcos_log_error("Probing sensor %s on addr %02X", sensor->name, sensor->i2c_addr);
+		if (sensor->i2c_ident_length <= 2)
+		{
+			if (!i2c_rd(fd, sensor->i2c_addr, sensor->i2c_ident_reg, (uint8_t*)&reg, sensor->i2c_ident_length, sensor))
+			{
+				if (reg == sensor->i2c_ident_value)
+				{
+					vcos_log_error("Found sensor %s at address %02X", sensor->name, sensor->i2c_addr);
+					break;
+				}
+			}
+		}
+		sensor_list++;
+		sensor = NULL;
+	}
+	return sensor;
+}
+
 /**
  * Allocates and generates a filename based on the
  * user-supplied pattern and the frame number.
@@ -233,16 +396,19 @@ static void callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 		RASPIRAW_PARAMS_T *cfg = (RASPIRAW_PARAMS_T *)port->userdata;
 
 		if (!(buffer->flags & MMAL_BUFFER_HEADER_FLAG_CODECSIDEINFO) &&
-                    (((count++) % cfg->saverate) == 0))
+			(((count++) % cfg->saverate) == 0))
 		{
 			// FIXME
 			// Save every Nth frame
 			// SD card access is too slow to do much more.
 
 			char *filename = NULL;
-
-			if(asprintf(&filename, cfg->output, count) >= 0)
+			char *des_filename = NULL;
+			// printf("Filename: %s\n", mem_dir);
+			if (asprintf(&filename, mem_dir, count) >= 0 &&
+				(asprintf(&des_filename, des_dir, count) >= 0))
 			{
+				// printf("\nfilename: %s, des_filename%s\n", filename, des_filename);
 				int fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 				if (fd >= 0)
 				{
@@ -255,12 +421,12 @@ static void callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 					ftruncate(fd, file_size);
 
 					// Memory-map the file
-					void* mapped_mem = mmap(NULL, file_size, PROT_WRITE, MAP_SHARED, fd, 0);
+					void *mapped_mem = mmap(NULL, file_size, PROT_WRITE, MAP_SHARED, fd, 0);
 					if (mapped_mem != MAP_FAILED)
 					{
 						size_t offset = 0;
 
-						if (cfg->ptso)  // make sure previous malloc() was successful
+						if (cfg->ptso) // make sure previous malloc() was successful
 						{
 							cfg->ptso->idx = count;
 							cfg->ptso->pts = buffer->pts;
@@ -286,14 +452,37 @@ static void callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 						perror("mmap");
 					}
 					close(fd);
+
+					// vcos_log_error("Now enqueueing task success...");
 				}
 				else
 				{
 					// Handle open file failure
 					perror("open");
 				}
-				free(filename);
+
+				// FIXME
 				// signal to copy the file
+				// vcos_log_error("Now enqueueing task...");
+				if (filename && des_filename)
+				{
+					// printf("%s, %s\n", filename, des_filename);
+					if (enableCopy){
+						char* src = strdup(filename);
+						char* dst = strdup(des_filename);
+						enqueue_task(src, dst);
+
+					}
+				}
+
+				if (filename){
+					free(filename);
+					filename = NULL;
+				}
+				if (des_filename){
+					free(des_filename);
+					filename = NULL;
+				}
 			}
 		}
 		buffer->length = 0;
@@ -430,11 +619,35 @@ static int parse_cmdline(int argc, char **argv, RASPIRAW_PARAMS_T *cfg)
 					percent++;
 				}
 				cfg->output = malloc(len + 10); // leave enough space for any timelapse generated changes to filename
+				des_dir = malloc(len + 10);
 				vcos_assert(cfg->output);
-				if (cfg->output)
+				if (cfg->output){
 					strncpy(cfg->output, argv[i + 1], len+1);
+					strncpy(des_dir, argv[i + 1], len+1);
+					const char *last_slash = strrchr(des_dir, '/');
+					vcos_log_error("Now setting enableCopy...");
+					if (last_slash != NULL)
+					{
+						appended_path = malloc(strlen(mem_dir) + strlen(last_slash) + 1);
+						strcpy(appended_path, mem_dir);	   
+						strcat(appended_path, last_slash); 						
+						size_t prefix_len = last_slash - des_dir;
+						if (strncmp(appended_path, des_dir, prefix_len) != 0)
+						{
+							enableCopy = true;
+							mem_dir = appended_path;
+							// printf("\nINmem_dir: %s\n", mem_dir);
+						}
+						else{
+							enableCopy = false;
+							mem_dir = des_dir;
+							// printf("\nOUTmem_dir: %s\n", mem_dir);
+						}
+					}
+
 					i++;
 					cfg->capture = 1;
+					}
 				}
 				else
 					valid = 0;
@@ -896,7 +1109,13 @@ int main(int argc, char** argv) {
 	int i;
 
 	bcm_host_init();
-	vcos_log_register("RaspiRaw", VCOS_LOG_CATEGORY);
+	vcos_log_register("FastRaspiRaw", VCOS_LOG_CATEGORY);
+	
+	vcos_log_error("Now start thread pool...");
+	if(enableCopy)
+		init_thread_pool(MAX_THREADS);
+	vcos_log_error("Now start thread pool successful...");
+	
 
 	status = mmal_component_create("vc.ril.rawcam", &rawcam);
 	if (status != MMAL_SUCCESS)
@@ -1362,6 +1581,13 @@ component_destroy:
 		}
 		free(cfg.ptso);
 	}
+
+	vcos_log_error("Now stop thread pool...");
+	if(enableCopy){
+		// sem_post(&producer_stop_sem);
+		dstr_thread_pool(MAX_THREADS);
+	}
+	vcos_log_error("Now stop thread pool successful...");
 
 	return 0;
 }
